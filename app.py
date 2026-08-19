@@ -244,15 +244,7 @@ app.layout = html.Div([
                 "Enter any dates you want. Invalid dates may produce an error.",
                 style={"display":"block","opacity":".65","marginTop":"6px","marginBottom":"8px"}
             ),
-            html.Label("Quick range", className="sub-label"),
-            html.Div([
-                html.Button("1M", id="range-1m", n_clicks=0, className="range-button"),
-                html.Button("3M", id="range-3m", n_clicks=0, className="range-button"),
-                html.Button("6M", id="range-6m", n_clicks=0, className="range-button"),
-                html.Button("1Y", id="range-1y", n_clicks=0, className="range-button"),
-                html.Button("5Y", id="range-5y", n_clicks=0, className="range-button"),
-                html.Button("Max", id="range-max", n_clicks=0, className="range-button"),
-            ], className="range-buttons"),
+
         ], className="control"),
 
         html.Div([
@@ -403,34 +395,6 @@ def sync_dates(tickers, custom, reset_clicks, current_start, current_end):
         )
     except Exception as e:
         return None, None, f"Could not load default dates: {e}"
-
-@app.callback(
-    Output("start-date", "date", allow_duplicate=True),
-    Output("end-date", "date", allow_duplicate=True),
-    Input("range-1m", "n_clicks"),
-    Input("range-3m", "n_clicks"),
-    Input("range-6m", "n_clicks"),
-    Input("range-1y", "n_clicks"),
-    Input("range-5y", "n_clicks"),
-    Input("range-max", "n_clicks"),
-    State("start-date", "date"),
-    State("end-date", "date"),
-    prevent_initial_call=True,
-)
-def quick_range(n1,n3,n6,n1y,n5y,nmax,current_start,current_end):
-    from dash import ctx
-    if not current_end and not current_start:
-        return None,None
-    anchor=pd.Timestamp(current_end or current_start).normalize()
-    clicked=ctx.triggered_id
-    spans={"range-1m":31,"range-3m":92,"range-6m":183,"range-1y":365,"range-5y":365*5}
-    if clicked=="range-max":
-        # Keep the existing end and move start far back; actual data availability
-        # is intentionally left to the analysis step.
-        start=pd.Timestamp("1900-01-01")
-    else:
-        start=anchor-pd.Timedelta(days=spans.get(clicked,365))
-    return start.date(),anchor.date()
 
 @app.callback(
     Output("cards", "children"),
