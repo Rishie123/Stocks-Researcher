@@ -220,22 +220,28 @@ app.layout = html.Div([
                 ],
                 value="single", inline=True
             ),
-            html.Label("Analysis dates", className="sub-label"),
-            dcc.DatePickerRange(
-                id="date-range",
+            html.Label("Start date", className="sub-label"),
+            dcc.DatePickerSingle(
+                id="start-date",
                 display_format="DD-MMM-YYYY",
-                start_date_placeholder_text="Start date",
-                end_date_placeholder_text="End date",
-                clearable=False,
-                minimum_nights=0,
-                number_of_months_shown=2,
-                first_day_of_week=1,
+                placeholder="Start date",
+                clearable=True,
                 with_portal=True,
-                updatemode="singledate",
-                day_size=36
+                number_of_months_shown=2,
+                first_day_of_week=1
+            ),
+            html.Label("End date", className="sub-label"),
+            dcc.DatePickerSingle(
+                id="end-date",
+                display_format="DD-MMM-YYYY",
+                placeholder="End date",
+                clearable=True,
+                with_portal=True,
+                number_of_months_shown=2,
+                first_day_of_week=1
             ),
             html.Small(
-                "Full available Yahoo Finance history. You can type a date directly or navigate month-by-month.",
+                "Enter any dates you want. Invalid dates may produce an error.",
                 style={"display":"block","opacity":".65","marginTop":"6px","marginBottom":"8px"}
             ),
             html.Label("Quick range", className="sub-label"),
@@ -355,110 +361,76 @@ def reset_dashboard(n_clicks):
 
 
 @app.callback(
-    Output("date-range", "min_date_allowed"),
-    Output("date-range", "max_date_allowed"),
-    Output("date-range", "start_date"),
-    Output("date-range", "end_date"),
+    Output("start-date", "date"),
+    Output("end-date", "date"),
     Output("status", "children"),
     Input("ticker", "value"),
     Input("custom-ticker", "value"),
     Input("reset", "n_clicks"),
-    State("date-range", "start_date"),
-    State("date-range", "end_date"),
+    State("start-date", "date"),
+    State("end-date", "date"),
 )
-def sync_date_range(tickers, custom, reset_clicks, current_start, current_end):
-    selected = [x for x in (tickers or []) if x]
+def sync_dates(tickers, custom, reset_clicks, current_start, current_end):
+    selected=[x for x in (tickers or []) if x]
     if (custom or "").strip():
         selected.append(custom.strip())
-
     if not selected:
-        return None, None, None, None, "Select at least one stock."
+        return None, None, "Select at least one stock."
 
+    # Determine the latest available date for sensible defaults only.
+    # User-entered dates are deliberately not clamped or rejected here.
     try:
-        starts, ends = [], []
+        ends=[]
         for ticker in selected:
-            data = download_history(ticker)
-            starts.append(pd.Timestamp(data.index.min()).normalize())
+            data=download_history(ticker)
             ends.append(pd.Timestamp(data.index.max()).normalize())
+        hi=min(ends)
 
-        # The valid picker range is the common historical range of all selected stocks,
-        # capped at today's date. It is never hard-coded.
-        lo = max(starts)
-        hi = min(min(ends), pd.Timestamp(date.today()).normalize())
-
-        if lo > hi:
-            raise ValueError("Selected stocks have no overlapping historical data.")
-
-        # Explicit reset: latest one year.
         if reset_clicks:
-            new_start = max(lo, hi - pd.Timedelta(days=365))
-            new_end = hi
-        else:
-            # Preserve existing dates whenever they remain valid.
-            old_start = pd.Timestamp(current_start).normalize() if current_start else None
-            old_end = pd.Timestamp(current_end).normalize() if current_end else None
+            return (max(pd.Timestamp("1900-01-01"), hi-pd.Timedelta(days=365)).date(),
+                    hi.date(),
+                    f"Reset complete. Latest common Yahoo data: {hi.date()}.")
 
-            if old_start is None or old_end is None:
-                new_start = max(lo, hi - pd.Timedelta(days=365))
-                new_end = hi
-            else:
-                new_start = max(lo, min(old_start, hi))
-                new_end = max(lo, min(old_end, hi))
+        if current_start and current_end:
+            return current_start, current_end, "Dates preserved."
+        if current_start:
+            return current_start, hi.date(), "Start date preserved; end date set to latest available data."
+        if current_end:
+            return max(pd.Timestamp("1900-01-01"), hi-pd.Timedelta(days=365)).date(), current_end, "End date preserved; start date set to a one-year default."
 
-                # If the selected stocks make the old range invalid, use the
-                # latest valid one-year range instead of producing an inverted range.
-                if new_start > new_end:
-                    new_start = max(lo, hi - pd.Timedelta(days=365))
-                    new_end = hi
-
-        label = ", ".join(selected[:4]) + ("..." if len(selected) > 4 else "")
-        return (
-            lo.date(),
-            hi.date(),
-            new_start.date(),
-            new_end.date(),
-            f"Available common history for {label}: {lo.date()} → {hi.date()}."
+        return max(pd.Timestamp("1900-01-01"), hi-pd.Timedelta(days=365)).date(), hi.date(), (
+            f"Default range: latest one year ending {hi.date()}."
         )
     except Exception as e:
-        return None, None, None, None, f"Could not load historical range: {e}"
+        return None, None, f"Could not load default dates: {e}"
 
 @app.callback(
-    Output("date-range", "start_date", allow_duplicate=True),
-    Output("date-range", "end_date", allow_duplicate=True),
+    Output("start-date", "date", allow_duplicate=True),
+    Output("end-date", "date", allow_duplicate=True),
     Input("range-1m", "n_clicks"),
     Input("range-3m", "n_clicks"),
     Input("range-6m", "n_clicks"),
     Input("range-1y", "n_clicks"),
     Input("range-5y", "n_clicks"),
     Input("range-max", "n_clicks"),
-    State("date-range", "min_date_allowed"),
-    State("date-range", "max_date_allowed"),
+    State("start-date", "date"),
+    State("end-date", "date"),
     prevent_initial_call=True,
 )
-def apply_quick_range(n1, n3, n6, n1y, n5y, nmax, min_allowed, max_allowed):
+def quick_range(n1,n3,n6,n1y,n5y,nmax,current_start,current_end):
     from dash import ctx
-
-    if not max_allowed:
-        return None, None
-
-    hi = pd.Timestamp(max_allowed).normalize()
-    lo = pd.Timestamp(min_allowed).normalize() if min_allowed else hi
-    clicked = ctx.triggered_id
-
-    spans = {
-        "range-1m": 31,
-        "range-3m": 92,
-        "range-6m": 183,
-        "range-1y": 365,
-        "range-5y": 365 * 5,
-    }
-
-    if clicked == "range-max":
-        start = lo
+    if not current_end and not current_start:
+        return None,None
+    anchor=pd.Timestamp(current_end or current_start).normalize()
+    clicked=ctx.triggered_id
+    spans={"range-1m":31,"range-3m":92,"range-6m":183,"range-1y":365,"range-5y":365*5}
+    if clicked=="range-max":
+        # Keep the existing end and move start far back; actual data availability
+        # is intentionally left to the analysis step.
+        start=pd.Timestamp("1900-01-01")
     else:
-        start = max(lo, hi - pd.Timedelta(days=spans.get(clicked, 365)))
-
-    return start.date(), hi.date()
+        start=anchor-pd.Timedelta(days=spans.get(clicked,365))
+    return start.date(),anchor.date()
 
 @app.callback(
     Output("cards", "children"),
@@ -474,8 +446,8 @@ def apply_quick_range(n1, n3, n6, n1y, n5y, nmax, min_allowed, max_allowed):
     State("ticker", "value"),
     State("custom-ticker", "value"),
     State("mode", "value"),
-    State("date-range", "start_date"),
-    State("date-range", "end_date"),
+    State("start-date", "date"),
+    State("end-date", "date"),
     State("window", "value"),
     State("metric", "value"),
     State("benchmark", "value"),

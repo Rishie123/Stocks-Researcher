@@ -44,3 +44,7 @@ label { display: block; font-weight: 700; margin-bottom: 8px; }
 .range-buttons { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; }
 .range-button { border:1px solid #d5dbe5; background:white; border-radius:6px; padding:6px 11px; cursor:pointer; font-weight:600; }
 .range-button:hover { background:#f0f3f8; }
+
+.DatePickerSingle { width: 100%; }
+.DateInput { width: 100%; }
+.DateInput_input { width: 100%; box-sizing: border-box; font-size: 14px; padding: 10px 8px; }
