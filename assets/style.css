@@ -1,44 +1,112 @@
-body { margin: 0; font-family: Arial, sans-serif; background: #f5f7fb; color: #172033; }
-.page { max-width: 1400px; margin: auto; padding: 24px; }
-.hero { background: white; padding: 26px; border-radius: 14px; margin-bottom: 18px; box-shadow: 0 2px 10px #00000012; }
-.hero h1 { margin: 0 0 8px; }
-.controls { display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: 16px; }
-.control { background: white; padding: 18px; border-radius: 12px; box-shadow: 0 2px 10px #00000010; }
-label { display: block; font-weight: 700; margin-bottom: 8px; }
-.sub-label { margin-top: 16px; }
-.analyse-button { margin: 18px 0; padding: 12px 28px; border: 0; border-radius: 8px; cursor: pointer; font-weight: 700; }
-.status { background: white; padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; }
-.cards { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; margin-bottom: 18px; }
-.card { background: white; padding: 16px; border-radius: 12px; box-shadow: 0 2px 10px #00000010; }
-.card-title { font-size: 12px; opacity: .65; margin-bottom: 8px; }
-.card-value { font-size: 21px; font-weight: 700; }
-.chart-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-.chart, .table-panel, .statistics { background: white; padding: 12px; border-radius: 12px; margin-bottom: 18px; }
-.stat-line { display: flex; gap: 24px; flex-wrap: wrap; font-weight: 600; margin: 10px 0; }
-.warning { font-weight: 700; }
-@media (max-width: 1000px) { .controls, .chart-row { grid-template-columns: 1fr; } .cards { grid-template-columns: repeat(2, 1fr); } }
 
-.chart-options { margin-top: 14px; display: flex; gap: 16px; }
+body {
+    margin: 0;
+    font-family: Arial, sans-serif;
+    background: #f5f7fa;
+    color: #17202a;
+}
 
+.page {
+    max-width: 1500px;
+    margin: 0 auto;
+    padding: 28px;
+}
 
-.action-buttons { display:flex; gap:10px; margin:18px 0; align-items:center; }
-.action-buttons button { min-width:125px; padding:12px 22px; border-radius:9px; cursor:pointer; font-size:15px; font-weight:700; }
-.action-buttons button:active { transform:translateY(1px); }
-.analyse-button { margin:0; border:0; }
-.reset-button { border:1px solid #cfd6e2; background:white; color:#263244; }
-.reset-button:hover { background:#f0f3f8; }
+h1 {
+    margin-bottom: 4px;
+}
 
-.DateRangePicker { width: 100%; }
-.DateInput { width: 48%; }
-.DateInput_input { font-size: 14px; padding: 9px 8px; }
+.subtitle {
+    color: #5f6b7a;
+    margin-top: 0;
+}
 
-.ratio-controls { background:white; padding:18px; border-radius:12px; box-shadow:0 2px 10px #00000010; margin:18px 0; }
+.control-panel,
+.results-panel {
+    background: white;
+    border-radius: 12px;
+    padding: 20px;
+    margin: 18px 0;
+    box-shadow: 0 2px 12px rgba(0,0,0,.07);
+}
 
-/* V9 date picker */
-.DateRangePicker { width: 100%; }
-.DateInput { width: 48%; }
-.DateInput_input { width: 100%; box-sizing: border-box; font-size: 14px; padding: 10px 8px; }
+.control-label {
+    display: block;
+    margin-top: 14px;
+}
 
-.DatePickerSingle { width: 100%; }
-.DateInput { width: 100%; }
-.DateInput_input { width: 100%; box-sizing: border-box; font-size: 14px; padding: 10px 8px; }
+.text-input,
+.number-input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 9px;
+    margin-top: 5px;
+}
+
+.DateInput,
+.DateInput_input {
+    width: 100%;
+}
+
+.DatePickerSingle {
+    margin-top: 5px;
+}
+
+.buttons {
+    display: flex;
+    gap: 10px;
+    margin-top: 20px;
+}
+
+.analyse,
+.reset {
+    border: 0;
+    border-radius: 7px;
+    padding: 10px 22px;
+    cursor: pointer;
+    font-weight: 700;
+}
+
+.analyse {
+    background: #1f6feb;
+    color: white;
+}
+
+.reset {
+    background: #e9edf2;
+    color: #17202a;
+}
+
+.status {
+    margin-top: 12px;
+    color: #52606d;
+}
+
+.chart-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 18px;
+}
+
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 10px;
+}
+
+.stats-grid > div {
+    padding: 12px;
+    background: #f5f7fa;
+    border-radius: 8px;
+}
+
+.error {
+    color: #b42318;
+    font-weight: 600;
+}
+
+@media (max-width: 900px) {
+    .chart-grid {
+        grid-template-columns: 1fr;
+    }
+}
