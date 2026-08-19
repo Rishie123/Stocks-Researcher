@@ -142,6 +142,51 @@ def card(title, value):
         html.Div(value, className="card-value")
     ], className="card")
 
+
+RATIO_LABELS = {
+    "trailingPE": "P/E Ratio",
+    "forwardPE": "Forward P/E",
+    "priceToBook": "Price / Book",
+    "priceToSalesTrailing12Months": "Price / Sales",
+    "enterpriseToEbitda": "EV / EBITDA",
+    "enterpriseToRevenue": "EV / Revenue",
+    "pegRatio": "PEG Ratio",
+    "debtToEquity": "Debt / Equity",
+    "currentRatio": "Current Ratio",
+    "returnOnEquity": "ROE",
+    "returnOnAssets": "ROA",
+    "profitMargins": "Profit Margin",
+    "operatingMargins": "Operating Margin",
+    "grossMargins": "Gross Margin",
+    "dividendYield": "Dividend Yield",
+    "marketCap": "Market Cap",
+    "epsTrailingTwelveMonths": "EPS",
+}
+DEFAULT_RATIOS = ["trailingPE","priceToBook","enterpriseToEbitda","debtToEquity","returnOnEquity"]
+
+def get_ratios(tickers, selected):
+    rows=[]
+    for ticker in tickers:
+        try:
+            info=yf.Ticker(ticker).info
+        except Exception:
+            info={}
+        row={"Stock":ticker}
+        for key in selected:
+            label=RATIO_LABELS[key]
+            value=info.get(key)
+            if value is None:
+                row[label]="N/A"
+            elif key in {"returnOnEquity","returnOnAssets","profitMargins","operatingMargins","grossMargins","dividendYield"}:
+                row[label]=f"{value*100:.2f}%"
+            elif key=="marketCap":
+                row[label]=f"{value/1e12:.2f}T" if value>=1e12 else (f"{value/1e9:.2f}B" if value>=1e9 else f"{value:,.0f}")
+            else:
+                try: row[label]=f"{float(value):.2f}"
+                except (TypeError,ValueError): row[label]=str(value)
+        rows.append(row)
+    return rows
+
 app = Dash(__name__, title="Stock Analytics Dashboard")
 server = app.server
 
@@ -181,16 +226,17 @@ app.layout = html.Div([
                 display_format="DD-MMM-YYYY",
                 start_date_placeholder_text="Start date",
                 end_date_placeholder_text="End date",
-                minimum_nights=0,
                 clearable=False,
+                minimum_nights=0,
                 number_of_months_shown=2,
-                with_portal=True,
                 first_day_of_week=1,
-                reopen_calendar_on_clear=True
+                with_portal=True,
+                updatemode="singledate",
+                day_size=36
             ),
             html.Small(
-                "Calendar covers the full available Yahoo Finance history. You can type a date directly.",
-                style={"display":"block", "opacity":".65", "marginTop":"6px"}
+                "Full available Yahoo Finance history. You can type a date directly or navigate month-by-month.",
+                style={"display":"block","opacity":".65","marginTop":"6px","marginBottom":"8px"}
             ),
             html.Label("Quick range", className="sub-label"),
             html.Div([
@@ -232,6 +278,21 @@ app.layout = html.Div([
     ], className="controls"),
 
     html.Div([
+        html.Label("Financial ratios"),
+        dcc.Dropdown(
+            id="ratio-selection",
+            options=[{"label":v,"value":k} for k,v in RATIO_LABELS.items()],
+            value=DEFAULT_RATIOS,
+            multi=True,
+            clearable=False
+        ),
+        html.Small(
+            "Five key ratios are selected by default. Use the dropdown to add more.",
+            style={"display":"block","opacity":".65","marginTop":"6px"}
+        ),
+    ], className="ratio-controls"),
+
+    html.Div([
         html.Button("↻ Reset", id="reset", n_clicks=0, className="reset-button"),
         html.Button("✓ Analyse", id="analyse", n_clicks=0, className="analyse-button"),
     ], className="action-buttons"),
@@ -261,6 +322,16 @@ app.layout = html.Div([
             style_table={"overflowX": "auto"},
             style_cell={"padding": "8px", "textAlign": "left"},
             style_header={"fontWeight": "bold"},
+        ),
+        html.H3("Financial Ratios"),
+        dash_table.DataTable(
+            id="ratio-table",
+            columns=[],
+            data=[],
+            page_size=10,
+            style_table={"overflowX": "auto"},
+            style_cell={"padding": "8px", "textAlign": "left"},
+            style_header={"fontWeight": "bold"},
         )
     ], className="table-panel"),
 
@@ -275,11 +346,12 @@ app.layout = html.Div([
     Output("metric", "value"),
     Output("benchmark", "value"),
     Output("chart-type", "value"),
+    Output("ratio-selection", "value"),
     Input("reset", "n_clicks"),
     prevent_initial_call=True,
 )
 def reset_dashboard(n_clicks):
-    return ["GOLDBEES.NS"], "", "single", 3, "Close", 1.0, "line"
+    return ["GOLDBEES.NS"], "", "single", 3, "Close", 1.0, "line", DEFAULT_RATIOS
 
 
 @app.callback(
@@ -294,10 +366,11 @@ def reset_dashboard(n_clicks):
     State("date-range", "start_date"),
     State("date-range", "end_date"),
 )
-def update_dates(tickers, custom, reset_clicks, current_start, current_end):
+def sync_date_range(tickers, custom, reset_clicks, current_start, current_end):
     selected = [x for x in (tickers or []) if x]
     if (custom or "").strip():
         selected.append(custom.strip())
+
     if not selected:
         return None, None, None, None, "Select at least one stock."
 
@@ -305,43 +378,50 @@ def update_dates(tickers, custom, reset_clicks, current_start, current_end):
         starts, ends = [], []
         for ticker in selected:
             data = download_history(ticker)
-            starts.append(data.index.min())
-            ends.append(data.index.max())
+            starts.append(pd.Timestamp(data.index.min()).normalize())
+            ends.append(pd.Timestamp(data.index.max()).normalize())
 
-        today = pd.Timestamp(date.today()).normalize()
-        lo = max(starts).normalize()
-        hi = min(min(ends), today)
+        # The valid picker range is the common historical range of all selected stocks,
+        # capped at today's date. It is never hard-coded.
+        lo = max(starts)
+        hi = min(min(ends), pd.Timestamp(date.today()).normalize())
 
         if lo > hi:
-            raise ValueError("The selected stocks have no overlapping historical date range.")
+            raise ValueError("Selected stocks have no overlapping historical data.")
 
-        # A Reset explicitly requests a fresh one-year range.
+        # Explicit reset: latest one year.
         if reset_clicks:
-            default_start = max(lo, hi - pd.Timedelta(days=365))
-            default_end = hi
-            return lo.date(), hi.date(), default_start.date(), default_end.date(), (
-                f"Reset complete. Common available history: {lo.date()} to {hi.date()}."
-            )
-
-        # Preserve the user's existing dates whenever they remain valid.
-        requested_start = pd.Timestamp(current_start).normalize() if current_start else max(lo, hi - pd.Timedelta(days=365))
-        requested_end = pd.Timestamp(current_end).normalize() if current_end else hi
-
-        new_start = max(lo, min(requested_start, hi))
-        new_end = max(lo, min(requested_end, hi))
-
-        if new_start > new_end:
-            new_end = hi
             new_start = max(lo, hi - pd.Timedelta(days=365))
+            new_end = hi
+        else:
+            # Preserve existing dates whenever they remain valid.
+            old_start = pd.Timestamp(current_start).normalize() if current_start else None
+            old_end = pd.Timestamp(current_end).normalize() if current_end else None
+
+            if old_start is None or old_end is None:
+                new_start = max(lo, hi - pd.Timedelta(days=365))
+                new_end = hi
+            else:
+                new_start = max(lo, min(old_start, hi))
+                new_end = max(lo, min(old_end, hi))
+
+                # If the selected stocks make the old range invalid, use the
+                # latest valid one-year range instead of producing an inverted range.
+                if new_start > new_end:
+                    new_start = max(lo, hi - pd.Timedelta(days=365))
+                    new_end = hi
 
         label = ", ".join(selected[:4]) + ("..." if len(selected) > 4 else "")
-        return lo.date(), hi.date(), new_start.date(), new_end.date(), (
-            f"Common available history for {label}: {lo.date()} to {hi.date()}."
+        return (
+            lo.date(),
+            hi.date(),
+            new_start.date(),
+            new_end.date(),
+            f"Available common history for {label}: {lo.date()} → {hi.date()}."
         )
     except Exception as e:
-        return None, None, None, None, f"Could not load selected history: {e}"
+        return None, None, None, None, f"Could not load historical range: {e}"
 
-# Quick date ranges.
 @app.callback(
     Output("date-range", "start_date", allow_duplicate=True),
     Output("date-range", "end_date", allow_duplicate=True),
@@ -355,23 +435,30 @@ def update_dates(tickers, custom, reset_clicks, current_start, current_end):
     State("date-range", "max_date_allowed"),
     prevent_initial_call=True,
 )
-def quick_range(n1, n3, n6, n12, n60, nmax, min_allowed, max_allowed):
+def apply_quick_range(n1, n3, n6, n1y, n5y, nmax, min_allowed, max_allowed):
     from dash import ctx
+
     if not max_allowed:
         return None, None
-    end = pd.Timestamp(max_allowed).normalize()
-    minimum = pd.Timestamp(min_allowed).normalize() if min_allowed else end
-    days = {
+
+    hi = pd.Timestamp(max_allowed).normalize()
+    lo = pd.Timestamp(min_allowed).normalize() if min_allowed else hi
+    clicked = ctx.triggered_id
+
+    spans = {
         "range-1m": 31,
         "range-3m": 92,
         "range-6m": 183,
         "range-1y": 365,
-        "range-5y": 365*5,
+        "range-5y": 365 * 5,
     }
-    clicked = ctx.triggered_id
-    start = minimum if clicked == "range-max" else max(minimum, end - pd.Timedelta(days=days.get(clicked, 365)))
-    return start.date(), end.date()
 
+    if clicked == "range-max":
+        start = lo
+    else:
+        start = max(lo, hi - pd.Timedelta(days=spans.get(clicked, 365)))
+
+    return start.date(), hi.date()
 
 @app.callback(
     Output("cards", "children"),
@@ -381,6 +468,8 @@ def quick_range(n1, n3, n6, n12, n60, nmax, min_allowed, max_allowed):
     Output("results-table", "data"),
     Output("statistics-panel", "children"),
     Output("status", "children", allow_duplicate=True),
+    Output("ratio-table", "columns"),
+    Output("ratio-table", "data"),
     Input("analyse", "n_clicks"),
     State("ticker", "value"),
     State("custom-ticker", "value"),
@@ -391,9 +480,10 @@ def quick_range(n1, n3, n6, n12, n60, nmax, min_allowed, max_allowed):
     State("metric", "value"),
     State("benchmark", "value"),
     State("chart-type", "value"),
+    State("ratio-selection", "value"),
     prevent_initial_call=True,
 )
-def analyse(n, ticker, custom, mode, start_date, end_date, window, metric, benchmark, chart_type):
+def analyse(n, ticker, custom, mode, start_date, end_date, window, metric, benchmark, chart_type, ratio_selection):
     selected = list(ticker or [])
     if (custom or "").strip():
         selected.append(custom.strip())
@@ -628,13 +718,15 @@ def analyse(n, ticker, custom, mode, start_date, end_date, window, metric, bench
             f"Analysed {len(selected)} stock(s). Common available history: "
             f"{common_lo.date()} to {common_hi.date()}."
         )
-        return cards, chart, ret_chart, columns, comparison_rows, stat_children, status
+        ratio_rows = get_ratios(selected, ratio_selection or DEFAULT_RATIOS)
+        ratio_columns = [{"name": c, "id": c} for c in ratio_rows[0].keys()] if ratio_rows else []
+        return cards, chart, ret_chart, columns, comparison_rows, stat_children, status, ratio_columns, ratio_rows
 
     except Exception as e:
         return [], empty, empty, [], [], [
             html.H3("Statistical Analysis"),
             html.P("Analysis could not be completed.", className="warning")
-        ], f"Error: {e}"
+        ], f"Error: {e}", [], []
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=8050)
