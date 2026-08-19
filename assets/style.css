@@ -1,112 +1,82 @@
 
-body {
-    margin: 0;
-    font-family: Arial, sans-serif;
-    background: #f5f7fa;
-    color: #17202a;
+* { box-sizing: border-box; }
+body { margin:0; background:#f4f6f8; color:#17202a;
+       font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+.page { width:min(1500px,100%); margin:auto; padding:24px; }
+.hero { background:#17202a; color:white; border-radius:18px;
+        padding:clamp(24px,5vw,52px); margin-bottom:18px; }
+.eyebrow { font-size:12px; letter-spacing:.14em; font-weight:800;
+           opacity:.65; margin-bottom:10px; }
+.hero h1 { font-size:clamp(30px,5vw,54px); line-height:1; margin:0 0 12px; }
+.hero p { max-width:760px; margin:0; line-height:1.5; opacity:.78; }
+.workspace { display:grid; grid-template-columns:340px minmax(0,1fr);
+             gap:18px; align-items:start; }
+.controls,.chart-card,.card { background:white; border-radius:16px; padding:20px;
+                               box-shadow:0 2px 12px rgba(20,30,40,.07); }
+.controls { position:sticky; top:16px; }
+.controls label { display:block; margin:15px 0 6px; font-size:13px; font-weight:650; }
+.controls p,.heading p,.card p { color:#667085; line-height:1.45; }
+.input { width:100%; padding:10px 11px; border:1px solid #d7dde5;
+         border-radius:8px; font-size:14px; }
+.two-col { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:14px; }
+.DateInput,.DateInput_input { width:100%; }
+.actions { display:grid; grid-template-columns:1fr 1fr; gap:9px; margin-top:20px; }
+.primary,.secondary { border:0; border-radius:9px; padding:11px 14px;
+                       font-weight:750; cursor:pointer; }
+.primary { background:#1769e0; color:white; }
+.secondary { background:#edf0f4; color:#17202a; }
+.status { margin-top:12px; color:#5d6978; font-size:13px; line-height:1.45; }
+.chart-card,.card { margin-bottom:18px; min-width:0; }
+.heading h2,.card h2 { margin:0 0 6px; }
+.stats { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; }
+.stats > div { background:#f5f7fa; border-radius:10px; padding:13px;
+               display:flex; flex-direction:column; gap:5px; }
+.stats span { color:#667085; font-size:12px; }
+.stats strong { font-size:18px; }
+.error { color:#b42318; font-weight:650; line-height:1.5; }
+@media(max-width:1050px) {
+  .workspace { grid-template-columns:1fr; }
+  .controls { position:static; }
+  .stats { grid-template-columns:repeat(2,minmax(0,1fr)); }
+}
+@media(max-width:650px) {
+  .page { padding:10px; }
+  .hero,.controls,.chart-card,.card { border-radius:12px; }
+  .hero { padding:25px 20px; }
+  .controls,.chart-card,.card { padding:14px; }
+  .two-col,.actions,.stats { grid-template-columns:1fr; }
+  .hero h1 { font-size:32px; }
+  .dash-table-container { overflow-x:auto; }
 }
 
-.page {
-    max-width: 1500px;
-    margin: 0 auto;
-    padding: 28px;
+/* V3 chart spacing: keep titles and legends clear of the plot area. */
+.chart-card .js-plotly-plot {
+    overflow: visible;
 }
 
-h1 {
-    margin-bottom: 4px;
+/* V6: larger chart presentation on desktop, still fluid on small screens. */
+.chart-card {
+    padding: 24px;
 }
 
-.subtitle {
-    color: #5f6b7a;
-    margin-top: 0;
+.chart-card .js-plotly-plot,
+.chart-card .plot-container,
+.chart-card .svg-container {
+    width: 100% !important;
 }
 
-.control-panel,
-.results-panel {
-    background: white;
-    border-radius: 12px;
-    padding: 20px;
-    margin: 18px 0;
-    box-shadow: 0 2px 12px rgba(0,0,0,.07);
+@media (max-width: 1050px) {
+    .chart-card {
+        padding: 20px;
+    }
 }
 
-.control-label {
-    display: block;
-    margin-top: 14px;
-}
+@media (max-width: 650px) {
+    .chart-card {
+        padding: 12px;
+    }
 
-.text-input,
-.number-input {
-    width: 100%;
-    box-sizing: border-box;
-    padding: 9px;
-    margin-top: 5px;
-}
-
-.DateInput,
-.DateInput_input {
-    width: 100%;
-}
-
-.DatePickerSingle {
-    margin-top: 5px;
-}
-
-.buttons {
-    display: flex;
-    gap: 10px;
-    margin-top: 20px;
-}
-
-.analyse,
-.reset {
-    border: 0;
-    border-radius: 7px;
-    padding: 10px 22px;
-    cursor: pointer;
-    font-weight: 700;
-}
-
-.analyse {
-    background: #1f6feb;
-    color: white;
-}
-
-.reset {
-    background: #e9edf2;
-    color: #17202a;
-}
-
-.status {
-    margin-top: 12px;
-    color: #52606d;
-}
-
-.chart-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 18px;
-}
-
-.stats-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-    gap: 10px;
-}
-
-.stats-grid > div {
-    padding: 12px;
-    background: #f5f7fa;
-    border-radius: 8px;
-}
-
-.error {
-    color: #b42318;
-    font-weight: 600;
-}
-
-@media (max-width: 900px) {
-    .chart-grid {
-        grid-template-columns: 1fr;
+    .chart-card .js-plotly-plot {
+        min-height: 500px;
     }
 }
