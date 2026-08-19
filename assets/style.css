@@ -30,3 +30,7 @@ label { display: block; font-weight: 700; margin-bottom: 8px; }
 .analyse-button { margin:0; border:0; }
 .reset-button { border:1px solid #cfd6e2; background:white; color:#263244; }
 .reset-button:hover { background:#f0f3f8; }
+
+.DateRangePicker { width: 100%; }
+.DateInput { width: 48%; }
+.DateInput_input { font-size: 14px; padding: 9px 8px; }

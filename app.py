@@ -175,10 +175,32 @@ app.layout = html.Div([
                 ],
                 value="single", inline=True
             ),
-            html.Label("Start date", className="sub-label"),
-            dcc.DatePickerSingle(id="start-date", display_format="DD-MMM-YYYY"),
-            html.Label("End / comparison date", className="sub-label"),
-            dcc.DatePickerSingle(id="end-date", display_format="DD-MMM-YYYY"),
+            html.Label("Analysis dates", className="sub-label"),
+            dcc.DatePickerRange(
+                id="date-range",
+                display_format="DD-MMM-YYYY",
+                start_date_placeholder_text="Start date",
+                end_date_placeholder_text="End date",
+                minimum_nights=0,
+                clearable=False,
+                number_of_months_shown=2,
+                with_portal=True,
+                first_day_of_week=1,
+                reopen_calendar_on_clear=True
+            ),
+            html.Small(
+                "Calendar covers the full available Yahoo Finance history. You can type a date directly.",
+                style={"display":"block", "opacity":".65", "marginTop":"6px"}
+            ),
+            html.Label("Quick range", className="sub-label"),
+            html.Div([
+                html.Button("1M", id="range-1m", n_clicks=0, className="range-button"),
+                html.Button("3M", id="range-3m", n_clicks=0, className="range-button"),
+                html.Button("6M", id="range-6m", n_clicks=0, className="range-button"),
+                html.Button("1Y", id="range-1y", n_clicks=0, className="range-button"),
+                html.Button("5Y", id="range-5y", n_clicks=0, className="range-button"),
+                html.Button("Max", id="range-max", n_clicks=0, className="range-button"),
+            ], className="range-buttons"),
         ], className="control"),
 
         html.Div([
@@ -253,55 +275,103 @@ app.layout = html.Div([
     Output("metric", "value"),
     Output("benchmark", "value"),
     Output("chart-type", "value"),
-    Output("chart-options", "value"),
-    Output("date-range", "start_date"),
-    Output("date-range", "end_date"),
     Input("reset", "n_clicks"),
     prevent_initial_call=True,
 )
 def reset_dashboard(n_clicks):
-    today = pd.Timestamp(date.today()).normalize()
-    start = today - pd.Timedelta(days=365)
-    return (
-        ["GOLDBEES.NS"], "", "single", 3, "Close", 1.0,
-        "line", ["rolling"], start.date(), today.date()
-    )
+    return ["GOLDBEES.NS"], "", "single", 3, "Close", 1.0, "line"
+
 
 @app.callback(
-    Output("start-date", "min_date_allowed"),
-    Output("start-date", "max_date_allowed"),
-    Output("start-date", "date"),
-    Output("end-date", "min_date_allowed"),
-    Output("end-date", "max_date_allowed"),
-    Output("end-date", "date"),
+    Output("date-range", "min_date_allowed"),
+    Output("date-range", "max_date_allowed"),
+    Output("date-range", "start_date"),
+    Output("date-range", "end_date"),
     Output("status", "children"),
     Input("ticker", "value"),
     Input("custom-ticker", "value"),
+    Input("reset", "n_clicks"),
+    State("date-range", "start_date"),
+    State("date-range", "end_date"),
 )
-def update_dates(tickers, custom):
+def update_dates(tickers, custom, reset_clicks, current_start, current_end):
     selected = [x for x in (tickers or []) if x]
     if (custom or "").strip():
         selected.append(custom.strip())
     if not selected:
-        return None, None, None, None, None, None, "Select at least one stock."
+        return None, None, None, None, "Select at least one stock."
+
     try:
         starts, ends = [], []
         for ticker in selected:
             data = download_history(ticker)
             starts.append(data.index.min())
             ends.append(data.index.max())
-        # Common overlap across all selected assets.
-        lo = max(starts).date()
-        hi = min(ends).date()
+
+        today = pd.Timestamp(date.today()).normalize()
+        lo = max(starts).normalize()
+        hi = min(min(ends), today)
+
         if lo > hi:
             raise ValueError("The selected stocks have no overlapping historical date range.")
-        start_default = max(lo, (pd.Timestamp(hi) - pd.Timedelta(days=365)).date())
+
+        # A Reset explicitly requests a fresh one-year range.
+        if reset_clicks:
+            default_start = max(lo, hi - pd.Timedelta(days=365))
+            default_end = hi
+            return lo.date(), hi.date(), default_start.date(), default_end.date(), (
+                f"Reset complete. Common available history: {lo.date()} to {hi.date()}."
+            )
+
+        # Preserve the user's existing dates whenever they remain valid.
+        requested_start = pd.Timestamp(current_start).normalize() if current_start else max(lo, hi - pd.Timedelta(days=365))
+        requested_end = pd.Timestamp(current_end).normalize() if current_end else hi
+
+        new_start = max(lo, min(requested_start, hi))
+        new_end = max(lo, min(requested_end, hi))
+
+        if new_start > new_end:
+            new_end = hi
+            new_start = max(lo, hi - pd.Timedelta(days=365))
+
         label = ", ".join(selected[:4]) + ("..." if len(selected) > 4 else "")
-        return lo, hi, start_default, lo, hi, hi, (
-            f"Common available history for {label}: {lo} to {hi}."
+        return lo.date(), hi.date(), new_start.date(), new_end.date(), (
+            f"Common available history for {label}: {lo.date()} to {hi.date()}."
         )
     except Exception as e:
-        return None, None, None, None, None, None, f"Could not load selected history: {e}"
+        return None, None, None, None, f"Could not load selected history: {e}"
+
+# Quick date ranges.
+@app.callback(
+    Output("date-range", "start_date", allow_duplicate=True),
+    Output("date-range", "end_date", allow_duplicate=True),
+    Input("range-1m", "n_clicks"),
+    Input("range-3m", "n_clicks"),
+    Input("range-6m", "n_clicks"),
+    Input("range-1y", "n_clicks"),
+    Input("range-5y", "n_clicks"),
+    Input("range-max", "n_clicks"),
+    State("date-range", "min_date_allowed"),
+    State("date-range", "max_date_allowed"),
+    prevent_initial_call=True,
+)
+def quick_range(n1, n3, n6, n12, n60, nmax, min_allowed, max_allowed):
+    from dash import ctx
+    if not max_allowed:
+        return None, None
+    end = pd.Timestamp(max_allowed).normalize()
+    minimum = pd.Timestamp(min_allowed).normalize() if min_allowed else end
+    days = {
+        "range-1m": 31,
+        "range-3m": 92,
+        "range-6m": 183,
+        "range-1y": 365,
+        "range-5y": 365*5,
+    }
+    clicked = ctx.triggered_id
+    start = minimum if clicked == "range-max" else max(minimum, end - pd.Timedelta(days=days.get(clicked, 365)))
+    return start.date(), end.date()
+
 
 @app.callback(
     Output("cards", "children"),
@@ -315,8 +385,8 @@ def update_dates(tickers, custom):
     State("ticker", "value"),
     State("custom-ticker", "value"),
     State("mode", "value"),
-    State("start-date", "date"),
-    State("end-date", "date"),
+    State("date-range", "start_date"),
+    State("date-range", "end_date"),
     State("window", "value"),
     State("metric", "value"),
     State("benchmark", "value"),
