@@ -66,8 +66,10 @@ TICKERS = {
         "Asian Paints": "ASIANPAINT.NS", "Pidilite Industries": "PIDILITIND.NS",
     },
     "Gold & Commodities": {
-        "GoldBeES": "GOLDBEES.NS", "SBI Gold ETF": "SETFGOLD.NS",
+        "GoldBeES": "GOLDBEES.NS",
+    "Nifty 50 BeES": "NIFTYBEES.NS", "SBI Gold ETF": "SETFGOLD.NS",
         "Nippon India Silver ETF": "SILVERBEES.NS",
+        "Nifty 50 BeES": "NIFTYBEES.NS",
     },
 }
 
@@ -151,13 +153,15 @@ app.layout = html.Div([
 
     html.Div([
         html.Div([
-            html.Label("Stock / ETF / Index"),
+            html.Label("Stocks to compare (maximum 10)"),
             dcc.Dropdown(
-                id="ticker", options=options(), value="GOLDBEES.NS",
-                searchable=True, clearable=False
+                id="ticker", options=options(),
+                value=["GOLDBEES.NS"],
+                searchable=True, multi=True, clearable=False,
+                placeholder="Search and select up to 10 stocks..."
             ),
-            html.Label("Custom Yahoo ticker", className="sub-label"),
-            dcc.Input(id="custom-ticker", type="text", placeholder="e.g. RELIANCE.NS",
+            html.Label("Optional custom Yahoo ticker", className="sub-label"),
+            dcc.Input(id="custom-ticker", type="text", placeholder="Optional: e.g. RELIANCE.NS",
                       style={"width": "100%"})
         ], className="control"),
 
@@ -191,11 +195,30 @@ app.layout = html.Div([
             ),
             html.Label("Benchmark return (%)", className="sub-label"),
             dcc.Input(id="benchmark", type="number", value=1.0, step=0.1),
+            html.Label("Chart type", className="sub-label"),
+            dcc.Dropdown(
+                id="chart-type",
+                options=[
+                    {"label": "Line", "value": "line"},
+                    {"label": "Candlestick (single stock)", "value": "candlestick"},
+                    {"label": "Area", "value": "area"},
+                    {"label": "OHLC (single stock)", "value": "ohlc"},
+                ],
+                value="line", clearable=False
+            ),
         ], className="control"),
     ], className="controls"),
 
-    html.Button("Analyse", id="analyse", n_clicks=0, className="analyse-button"),
-    html.Div(id="status", className="status"),
+    html.Div([
+        html.Button("↻ Reset", id="reset", n_clicks=0, className="reset-button"),
+        html.Button("✓ Analyse", id="analyse", n_clicks=0, className="analyse-button"),
+    ], className="action-buttons"),
+
+    dcc.Loading(
+        id="analysis-loading",
+        type="dot",
+        children=html.Div(id="status", className="status")
+    ),
 
     html.Div(id="cards", className="cards"),
 
@@ -223,6 +246,28 @@ app.layout = html.Div([
 ], className="page")
 
 @app.callback(
+    Output("ticker", "value"),
+    Output("custom-ticker", "value"),
+    Output("mode", "value"),
+    Output("window", "value"),
+    Output("metric", "value"),
+    Output("benchmark", "value"),
+    Output("chart-type", "value"),
+    Output("chart-options", "value"),
+    Output("date-range", "start_date"),
+    Output("date-range", "end_date"),
+    Input("reset", "n_clicks"),
+    prevent_initial_call=True,
+)
+def reset_dashboard(n_clicks):
+    today = pd.Timestamp(date.today()).normalize()
+    start = today - pd.Timedelta(days=365)
+    return (
+        ["GOLDBEES.NS"], "", "single", 3, "Close", 1.0,
+        "line", ["rolling"], start.date(), today.date()
+    )
+
+@app.callback(
     Output("start-date", "min_date_allowed"),
     Output("start-date", "max_date_allowed"),
     Output("start-date", "date"),
@@ -233,17 +278,30 @@ app.layout = html.Div([
     Input("ticker", "value"),
     Input("custom-ticker", "value"),
 )
-def update_dates(ticker, custom):
-    selected = (custom or "").strip() or ticker
+def update_dates(tickers, custom):
+    selected = [x for x in (tickers or []) if x]
+    if (custom or "").strip():
+        selected.append(custom.strip())
+    if not selected:
+        return None, None, None, None, None, None, "Select at least one stock."
     try:
-        data = download_history(selected)
-        lo, hi = data.index.min().date(), data.index.max().date()
-        start = max(lo, hi - pd.Timedelta(days=365))
-        return lo, hi, start, lo, hi, hi, (
-            f"Available Yahoo Finance history for {selected}: {lo} to {hi}."
+        starts, ends = [], []
+        for ticker in selected:
+            data = download_history(ticker)
+            starts.append(data.index.min())
+            ends.append(data.index.max())
+        # Common overlap across all selected assets.
+        lo = max(starts).date()
+        hi = min(ends).date()
+        if lo > hi:
+            raise ValueError("The selected stocks have no overlapping historical date range.")
+        start_default = max(lo, (pd.Timestamp(hi) - pd.Timedelta(days=365)).date())
+        label = ", ".join(selected[:4]) + ("..." if len(selected) > 4 else "")
+        return lo, hi, start_default, lo, hi, hi, (
+            f"Common available history for {label}: {lo} to {hi}."
         )
     except Exception as e:
-        return None, None, None, None, None, None, f"Could not load {selected}: {e}"
+        return None, None, None, None, None, None, f"Could not load selected history: {e}"
 
 @app.callback(
     Output("cards", "children"),
@@ -262,157 +320,245 @@ def update_dates(ticker, custom):
     State("window", "value"),
     State("metric", "value"),
     State("benchmark", "value"),
+    State("chart-type", "value"),
     prevent_initial_call=True,
 )
-def analyse(n, ticker, custom, mode, start_date, end_date, window, metric, benchmark):
-    selected = (custom or "").strip() or ticker
+def analyse(n, ticker, custom, mode, start_date, end_date, window, metric, benchmark, chart_type):
+    selected = list(ticker or [])
+    if (custom or "").strip():
+        selected.append(custom.strip())
+    selected = list(dict.fromkeys(selected))
     empty = go.Figure()
-    try:
-        window = max(1, int(window or 3))
-        benchmark = float(benchmark or 0) / 100
-        data = download_history(selected)
-        s, used_col = clean_price_series(data, metric)
-        lo, hi = s.index.min().date(), s.index.max().date()
 
-        if not start_date or not end_date:
-            raise ValueError("Please select both dates.")
+    try:
+        if not selected:
+            raise ValueError("Please select at least one stock.")
+        if len(selected) > 10:
+            raise ValueError("You can compare a maximum of 10 stocks.")
+        window = max(1, int(window or 3))
+        benchmark_pct = float(benchmark or 0)
+        benchmark_fraction = benchmark_pct / 100
+
+        histories = {}
+        series = {}
+        available_starts, available_ends = [], []
+        for symbol in selected:
+            data = download_history(symbol)
+            s, used_col = clean_price_series(data, metric)
+            histories[symbol] = (s, used_col)
+            series[symbol] = s
+            available_starts.append(s.index.min())
+            available_ends.append(s.index.max())
+
+        common_lo = max(available_starts)
+        common_hi = min(available_ends)
         start = pd.Timestamp(start_date)
         end = pd.Timestamp(end_date)
-        if start < s.index.min() or end > s.index.max():
-            raise ValueError(f"Dates must fall within available history: {lo} to {hi}.")
+        if start < common_lo or end > common_hi:
+            raise ValueError(
+                f"Selected dates must fall within the common available history: "
+                f"{common_lo.date()} to {common_hi.date()}."
+            )
         if start > end:
             raise ValueError("Start date must be before end date.")
 
-        filtered = s.loc[(s.index >= start) & (s.index <= end)]
-        if filtered.empty:
-            raise ValueError("No trading observations exist in the selected range.")
+        rows_by_stock = {}
+        comparison_rows = []
 
-        # Single-period analysis
-        start_value, start_trade = trading_value(s, start, window)
-        end_value, end_trade = trading_value(s, end, window)
-        total_return = (end_value / start_value - 1) * 100
-        daily_returns = filtered.pct_change().dropna()
-        volatility = daily_returns.std() * np.sqrt(252) * 100 if len(daily_returns) > 1 else np.nan
-        running_max = filtered.cummax()
-        drawdown = (filtered / running_max - 1) * 100
-        max_drawdown = drawdown.min()
+        for symbol, (s, used_col) in histories.items():
+            filtered = s.loc[(s.index >= start) & (s.index <= end)]
+            if filtered.empty:
+                raise ValueError(f"No observations for {symbol} in the selected range.")
 
+            start_value, start_trade = trading_value(s, start, window)
+            end_value, end_trade = trading_value(s, end, window)
+            total_return = (end_value / start_value - 1) * 100
+
+            daily_returns = filtered.pct_change().dropna()
+            volatility = daily_returns.std() * np.sqrt(252) * 100 if len(daily_returns) > 1 else np.nan
+            running_max = filtered.cummax()
+            max_drawdown = (filtered / running_max - 1).min() * 100
+
+            rows_by_stock[symbol] = {
+                "series": filtered, "start_value": start_value, "end_value": end_value,
+                "start_trade": start_trade, "end_trade": end_trade,
+                "return": total_return, "volatility": volatility,
+                "max_drawdown": max_drawdown, "used_col": used_col,
+            }
+            comparison_rows.append({
+                "Stock": symbol,
+                "Baseline Trading Day": str(start_trade.date()),
+                "Comparison Trading Day": str(end_trade.date()),
+                "Baseline Rolling Mean": round(start_value, 4),
+                "Comparison Rolling Mean": round(end_value, 4),
+                "Return (%)": round(total_return, 4),
+                "Volatility (%)": round(volatility, 4) if not np.isnan(volatility) else None,
+                "Max Drawdown (%)": round(max_drawdown, 4),
+            })
+
+        # Price chart: normalized comparison for multiple stocks; selected standard chart for one.
         chart = go.Figure()
-        chart.add_trace(go.Scatter(x=filtered.index, y=filtered.values,
-                                   mode="lines", name=used_col))
-        chart.update_layout(title=f"{selected} — Price History",
-                            xaxis_title="Date", yaxis_title="Price",
-                            template="plotly_white", hovermode="x unified")
-
-        ret_chart = go.Figure()
-        ret_chart.add_trace(go.Bar(
-            x=[end_trade], y=[total_return],
-            name="Period Return"
-        ))
-        ret_chart.add_hline(y=float(benchmark * 100), line_dash="dash",
-                            annotation_text=f"Benchmark {benchmark*100:.2f}%")
-        ret_chart.update_layout(title="Period Return",
-                                xaxis_title="Comparison Date",
-                                yaxis_title="Return (%)",
-                                template="plotly_white")
-
-        rows = [{
-            "Date": str(end_trade.date()),
-            "Baseline Trading Day": str(start_trade.date()),
-            "Baseline Rolling Mean": round(start_value, 4),
-            "Comparison Rolling Mean": round(end_value, 4),
-            "Return (%)": round(total_return, 4),
-        }]
-
-        stats = descriptive(pd.Series([total_return]))
-        stat_tests = None
-
-        if mode == "historical":
-            years = range(start.year, end.year + 1)
-            historical_rows = []
-            for year in years:
-                try:
-                    b_date = pd.Timestamp(year=year, month=start.month, day=start.day)
-                    c_date = pd.Timestamp(year=year, month=end.month, day=end.day)
-                    if b_date < s.index.min() or c_date > s.index.max():
-                        continue
-                    b_val, b_trade = trading_value(s, b_date, window)
-                    c_val, c_trade = trading_value(s, c_date, window)
-                    r = (c_val / b_val - 1) * 100
-                    historical_rows.append({
-                        "Year": year,
-                        "Baseline Trading Day": str(b_trade.date()),
-                        "Comparison Trading Day": str(c_trade.date()),
-                        "Baseline Rolling Mean": round(b_val, 4),
-                        "Comparison Rolling Mean": round(c_val, 4),
-                        "Return (%)": round(r, 4),
-                    })
-                except Exception:
-                    continue
-
-            rows = historical_rows
-            returns = pd.Series([r["Return (%)"] / 100 for r in rows], dtype=float)
-            stats = descriptive(returns * 100)
-            stat_tests = test_statistics(returns, benchmark)
-
-            ret_chart = go.Figure()
-            ret_chart.add_trace(go.Bar(
-                x=[r["Year"] for r in rows],
-                y=[r["Return (%)"] for r in rows],
-                name="Historical Return"
-            ))
-            ret_chart.add_hline(y=benchmark * 100, line_dash="dash",
-                                annotation_text=f"Benchmark {benchmark*100:.2f}%")
-            ret_chart.update_layout(
-                title=f"Historical Returns: {start.strftime('%d-%b')} → {end.strftime('%d-%b')}",
-                xaxis_title="Year", yaxis_title="Return (%)",
-                template="plotly_white"
+        if len(selected) == 1:
+            symbol = selected[0]
+            info = rows_by_stock[symbol]
+            s = info["series"]
+            if chart_type == "candlestick":
+                raw = histories[symbol][0].loc[s.index]
+                chart.add_trace(go.Candlestick(
+                    x=raw.index, open=histories[symbol][0].loc[raw.index],
+                    high=histories[symbol][0].loc[raw.index],
+                    low=histories[symbol][0].loc[raw.index],
+                    close=raw.values, name=symbol
+                ))
+                # Replace the invalid OHLC construction above with the actual source columns when available.
+                data = download_history(symbol)
+                chart = go.Figure()
+                chart.add_trace(go.Candlestick(
+                    x=data.index, open=data["Open"], high=data["High"],
+                    low=data["Low"], close=data["Close"], name=symbol
+                ))
+            elif chart_type == "ohlc":
+                data = download_history(symbol)
+                chart.add_trace(go.Ohlc(
+                    x=data.index, open=data["Open"], high=data["High"],
+                    low=data["Low"], close=data["Close"], name=symbol
+                ))
+            elif chart_type == "area":
+                chart.add_trace(go.Scatter(x=s.index, y=s.values, mode="lines",
+                                           fill="tozeroy", name=symbol))
+            else:
+                chart.add_trace(go.Scatter(x=s.index, y=s.values, mode="lines", name=symbol))
+            chart.update_layout(title=f"{symbol} — Price History",
+                                xaxis_title="Date", yaxis_title="Price",
+                                template="plotly_white", hovermode="x unified")
+        else:
+            for symbol, info in rows_by_stock.items():
+                s = info["series"]
+                normalized = s / info["start_value"] * 100
+                chart.add_trace(go.Scatter(x=normalized.index, y=normalized.values,
+                                           mode="lines", name=symbol))
+            chart.update_layout(
+                title="Relative Performance — Start = 100",
+                xaxis_title="Date", yaxis_title="Indexed Value",
+                template="plotly_white", hovermode="x unified"
             )
 
-        cards = [
-            card("Baseline rolling mean", f"₹{start_value:,.2f}"),
-            card("Comparison rolling mean", f"₹{end_value:,.2f}"),
-            card("Return", f"{total_return:+.2f}%"),
-            card("Annualised volatility", "N/A" if np.isnan(volatility) else f"{volatility:.2f}%"),
-            card("Maximum drawdown", f"{max_drawdown:.2f}%"),
-            card("Benchmark", f"{benchmark*100:.2f}%"),
-        ]
+        # Return comparison.
+        ret_chart = go.Figure()
+        ret_chart.add_trace(go.Bar(
+            x=[r["Stock"] for r in comparison_rows],
+            y=[r["Return (%)"] for r in comparison_rows],
+            name="Return"
+        ))
+        ret_chart.add_hline(y=benchmark_pct, line_dash="dash",
+                            annotation_text=f"Benchmark {benchmark_pct:.2f}%")
+        ret_chart.update_layout(title="Period Returns",
+                                xaxis_title="Stock", yaxis_title="Return (%)",
+                                template="plotly_white")
 
-        stat_children = [
-            html.H3("Statistical Analysis"),
-            html.P(
-                "Statistical hypothesis tests are shown only in Historical repeated-period mode "
-                "with at least 5 usable observations."
-            ),
-            html.Div([
-                html.Span(f"Mean: {stats.get('Mean', np.nan):.2f}%"),
-                html.Span(f"Median: {stats.get('Median', np.nan):.2f}%"),
-                html.Span(f"Std Dev: {stats.get('Std Dev', np.nan):.2f}%"),
-                html.Span(f"Observations: {stats.get('Observations', 0)}"),
-            ], className="stat-line")
-        ]
-
-        if stat_tests:
-            stat_children.append(html.Div([
-                html.Span(f"T-test p-value: {stat_tests['T-test p-value']:.4f}"),
-                html.Span(f"Wilcoxon p-value: {stat_tests['Wilcoxon p-value']:.4f}"),
-            ], className="stat-line"))
-        elif mode == "historical":
-            stat_children.append(html.P(
-                "Insufficient observations for reliable hypothesis testing (minimum 5).",
-                className="warning"
-            ))
+        # Statistics apply to exactly one selected stock.
+        if len(selected) == 1:
+            test_symbol = selected[0]
+            info = rows_by_stock[test_symbol]
+            test_returns = pd.Series([info["return"] / 100.0])
+            stat_source = "single-period"
+            # Historical repeated periods can generate a proper sample.
+            if mode == "historical":
+                s = histories[test_symbol][0]
+                historical_rows = []
+                for year in range(start.year, end.year + 1):
+                    try:
+                        b_date = pd.Timestamp(year=year, month=start.month, day=start.day)
+                        c_date = pd.Timestamp(year=year, month=end.month, day=end.day)
+                        if b_date < s.index.min() or c_date > s.index.max():
+                            continue
+                        b_val, b_trade = trading_value(s, b_date, window)
+                        c_val, c_trade = trading_value(s, c_date, window)
+                        r = (c_val / b_val - 1) * 100
+                        historical_rows.append({
+                            "Year": year,
+                            "Baseline Trading Day": str(b_trade.date()),
+                            "Comparison Trading Day": str(c_trade.date()),
+                            "Baseline Rolling Mean": round(b_val, 4),
+                            "Comparison Rolling Mean": round(c_val, 4),
+                            "Return (%)": round(r, 4),
+                        })
+                    except Exception:
+                        continue
+                if historical_rows:
+                    test_returns = pd.Series([r["Return (%)"] / 100 for r in historical_rows])
+                    stat_source = "historical"
+                    comparison_rows = historical_rows
+                    ret_chart = go.Figure()
+                    ret_chart.add_trace(go.Bar(
+                        x=[r["Year"] for r in historical_rows],
+                        y=[r["Return (%)"] for r in historical_rows],
+                        name="Historical Return"
+                    ))
+                    ret_chart.add_hline(y=benchmark_pct, line_dash="dash",
+                                        annotation_text=f"Benchmark {benchmark_pct:.2f}%")
+                    ret_chart.update_layout(
+                        title=f"Historical Returns: {start.strftime('%d-%b')} → {end.strftime('%d-%b')}",
+                        xaxis_title="Year", yaxis_title="Return (%)", template="plotly_white"
+                    )
         else:
-            stat_children.append(html.P(
-                "Single-period mode produces one return observation; hypothesis tests are disabled.",
-                className="warning"
-            ))
+            test_symbol = None
+            test_returns = pd.Series(dtype=float)
+            stat_source = "comparison"
 
-        columns = [{"name": c, "id": c} for c in rows[0].keys()] if rows else []
-        status = f"Analysed {selected}. Available history: {lo} to {hi}. "
-        status += f"Using {len(filtered)} trading observations in the selected period."
+        stats = descriptive(test_returns * 100)
+        stat_tests = test_statistics(test_returns, benchmark_fraction) if stat_source == "historical" else None
 
-        return cards, chart, ret_chart, columns, rows, stat_children, status
+        # Cards use first selected stock for the single-period overview when multiple are selected.
+        primary = rows_by_stock[selected[0]]
+        cards = [
+            card("Stocks selected", str(len(selected))),
+            card("Primary stock return", f"{primary['return']:+.2f}%"),
+            card("Primary volatility", "N/A" if np.isnan(primary["volatility"]) else f"{primary['volatility']:.2f}%"),
+            card("Primary max drawdown", f"{primary['max_drawdown']:.2f}%"),
+            card("Benchmark", f"{benchmark_pct:.2f}%"),
+            card("Test stock", test_symbol or "Select below"),
+        ]
+
+        stat_children = [html.H3("Statistical Analysis")]
+        if len(selected) > 1:
+            stat_children += [
+                html.P("Multiple stocks are being compared. Statistical tests are run on one stock only."),
+                dcc.Dropdown(
+                    id="test-stock",
+                    options=[{"label": x, "value": x} for x in selected],
+                    value=selected[0], clearable=False
+                ),
+                html.P("V1 requires re-analysis after changing the test stock.", className="warning")
+            ]
+        elif stat_source == "historical" and len(test_returns) >= 5:
+            stat_tests = test_statistics(test_returns, benchmark_fraction)
+            stat_children += [
+                html.P(f"Testing: {test_symbol} against a {benchmark_pct:.2f}% benchmark."),
+                html.Div([
+                    html.Span(f"Mean: {stats.get('Mean', np.nan):.2f}%"),
+                    html.Span(f"Median: {stats.get('Median', np.nan):.2f}%"),
+                    html.Span(f"Std Dev: {stats.get('Std Dev', np.nan):.2f}%"),
+                    html.Span(f"Observations: {stats.get('Observations', 0)}"),
+                ], className="stat-line"),
+                html.Div([
+                    html.Span(f"T-test p-value: {stat_tests['T-test p-value']:.4f}"),
+                    html.Span(f"Wilcoxon p-value: {stat_tests['Wilcoxon p-value']:.4f}"),
+                ], className="stat-line")
+            ]
+        else:
+            stat_children += [
+                html.P("Single-period mode has one return observation; hypothesis tests require historical repeated periods."),
+                html.P("Use Historical repeated periods to create a sample for the t-test and Wilcoxon test.",
+                        className="warning")
+            ]
+
+        columns = [{"name": c, "id": c} for c in comparison_rows[0].keys()] if comparison_rows else []
+        status = (
+            f"Analysed {len(selected)} stock(s). Common available history: "
+            f"{common_lo.date()} to {common_hi.date()}."
+        )
+        return cards, chart, ret_chart, columns, comparison_rows, stat_children, status
 
     except Exception as e:
         return [], empty, empty, [], [], [
